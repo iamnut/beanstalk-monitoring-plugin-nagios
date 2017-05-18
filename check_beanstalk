@@ -1,0 +1,61 @@
+#!/bin/bash
+
+OK=0
+WARNING=1
+CRITICAL=2
+UNKNOWN=3
+
+BEANSTALK_HOST=$1
+BEANSTALK_PORT=$2
+JOB_NAME=$3
+WARNING_RATE=$4
+CRITICAL_RATE=$5
+
+print_usage() {
+    echo "Usage: ./check_beanstalk {Host/IP} {Port} {JobName} {WarningRate} {CriticalRate}"
+}
+
+check_host() {
+    if !( nc -z -v -w3 $BEANSTALK_HOST $BEANSTALK_PORT &> /dev/null ); then
+        echo "Can't connect beanstalk host | $BEANSTALK_HOST:$BEANSTALK_PORT"
+        exit $CRITICAL
+    fi
+}
+
+check_job() {
+    if !( echo -e "list-tubes\r\n" | nc $BEANSTALK_HOST $BEANSTALK_PORT | grep -q $JOB_NAME ); then
+        echo "Not Found ($JOB_NAME)"
+        exit $UNKNOWN
+    fi
+}
+
+check_queue() {
+    CURRENT_JOB_IN_QUEUE=$(echo -e "stats-tube $JOB_NAME\r\n" | nc $BEANSTALK_HOST $BEANSTALK_PORT | grep current-jobs-ready | awk {'print $2'})
+
+    if !( echo $CURRENT_JOB_IN_QUEUE | egrep -q '^[0-9]+$'); then
+        echo "UNKNOWN: Output not numeric ($CURRENT_JOB_IN_QUEUE)"
+        exit $UNKNOWN
+    fi
+
+    if [ $CURRENT_JOB_IN_QUEUE -gt $CRITICAL_RATE ]; then
+        echo "CRITICAL: $JOB_NAME $CURRENT_JOB_IN_QUEUE jobs | CRITICAL_RATE: $CRITICAL_RATE"
+        exit $CRITICAL
+    fi
+
+    if [ $CURRENT_JOB_IN_QUEUE -gt $WARNING_RATE ]; then
+        echo "WARNING: $JOB_NAME $CURRENT_JOB_IN_QUEUE jobs | WARNING_RATE: $WARNING_RATE"
+        exit $WARNING
+    fi
+}
+
+if [ $# -lt 5 ]; then
+    print_usage
+    exit $UNKNOWN
+fi
+
+check_host
+check_job
+check_queue
+
+echo "OK: $JOB_NAME $CURRENT_JOB_IN_QUEUE jobs"
+exit $OK
